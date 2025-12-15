@@ -6,6 +6,7 @@ Multi-architecture container based on Fedora 43 for working with AWS and OpenShi
 
 - **AWS CLI**: Both Fedora RPM and official AWS CLI v2 with alternatives support
 - **OpenShift CLI**: Versions 4.14 through 4.20 from stable channels
+- **Dynamic Version Selection**: Switch tool versions via environment variables at runtime
 - **ECS Exec Ready**: Designed for AWS Fargate with ECS Exec support
 - **Multi-architecture**: Supports both x86_64 (amd64) and ARM64 (aarch64)
 
@@ -32,7 +33,36 @@ make manifest      # Combines both architectures
 make clean         # Remove all images and manifests
 ```
 
+## Environment Variables
+
+The easiest way to select tool versions is via environment variables at container startup:
+
+| Variable | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `OC_VERSION` | `4.14`, `4.15`, `4.16`, `4.17`, `4.18`, `4.19`, `4.20` | `4.20` | OpenShift CLI version |
+| `AWS_CLI` | `fedora`, `official` | `official` | AWS CLI source |
+
+**Examples:**
+```bash
+# Use OpenShift CLI 4.18
+podman run -e OC_VERSION=4.18 rosa-boundary:latest
+
+# Use Fedora's AWS CLI
+podman run -e AWS_CLI=fedora rosa-boundary:latest
+
+# Use both together
+podman run -e OC_VERSION=4.17 -e AWS_CLI=fedora rosa-boundary:latest
+
+# With a custom command
+podman run -e OC_VERSION=4.19 rosa-boundary:latest /bin/bash
+```
+
 ## Tool Management
+
+The container supports two methods for switching tool versions:
+
+1. **Environment Variables** (recommended): Set `OC_VERSION` or `AWS_CLI` at container startup (see above)
+2. **Alternatives Commands** (advanced): Manually switch versions inside a running container
 
 ### AWS CLI Alternatives
 
@@ -69,11 +99,14 @@ alternatives --set oc /opt/openshift/4.19/oc
 
 ### Running locally
 ```bash
-# Run the container with overridden entrypoint
-podman run -it --entrypoint /bin/bash rosa-boundary:latest
+# Run with default versions (OC 4.20, official AWS CLI)
+podman run -it rosa-boundary:latest /bin/bash
+
+# Run with specific versions
+podman run -it -e OC_VERSION=4.18 -e AWS_CLI=fedora rosa-boundary:latest /bin/bash
 
 # Check tool versions
-podman run --rm --entrypoint /bin/bash rosa-boundary:latest -c "aws --version && oc version --client"
+podman run --rm rosa-boundary:latest sh -c "aws --version && oc version --client"
 ```
 
 ### Fargate Deployment
@@ -82,11 +115,12 @@ This container is designed to run as an AWS Fargate task with ECS Exec for remot
 
 1. Push to your container registry
 2. Create Fargate task definition using this image (platform version 1.4.0+)
-3. Enable ECS Exec on the task definition
-4. Configure SSM permissions in task IAM role
-5. Connect via `aws ecs execute-command`
+3. Set environment variables `OC_VERSION` and/or `AWS_CLI` if you need specific versions
+4. Enable ECS Exec on the task definition
+5. Configure SSM permissions in task IAM role
+6. Connect via `aws ecs execute-command`
 
-The container uses `sleep infinity` as the entrypoint. ECS Exec automatically handles SSM agent setup - no manual installation needed.
+The container runs `sleep infinity` by default. The entrypoint script switches tool versions based on environment variables before executing the command. ECS Exec automatically handles SSM agent setup - no manual installation needed.
 
 ## Image Details
 

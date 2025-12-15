@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Purpose
 
-Multi-architecture container for AWS Fargate that provides tools for managing AWS and OpenShift (ROSA) clusters. The container runs with `sleep infinity` entrypoint and is accessed via ECS Exec.
+Multi-architecture container for AWS Fargate that provides tools for managing AWS and OpenShift (ROSA) clusters. The container runs with an entrypoint script that supports dynamic version selection via environment variables, defaulting to `sleep infinity`, and is accessed via ECS Exec.
 
 ## Building
 
@@ -27,12 +27,12 @@ make clean
 
 ### Multi-Architecture Build System
 
-The Containerfile uses `TARGETARCH` build argument (automatically set by podman/buildx) to handle architecture-specific differences:
+The Containerfile uses `uname -m` to detect architecture at build time. When podman builds with `--platform linux/arm64`, RUN commands execute in QEMU emulation where `uname -m` returns `aarch64`. For `--platform linux/amd64`, it returns `x86_64`.
 
 - **x86_64 (amd64)**: Uses `x86_64` for AWS CLI, no suffix for OpenShift downloads
 - **ARM64 (aarch64)**: Uses `aarch64` for AWS CLI, `-arm64` suffix for OpenShift downloads
 
-Architecture variables are stored in temp files (`/tmp/aws_cli_arch`, `/tmp/oc_suffix`) during build and consumed by subsequent RUN commands.
+Architecture values from `uname -m` are stored in temp files (`/tmp/aws_cli_arch`, `/tmp/oc_suffix`) during build and consumed by subsequent RUN commands.
 
 ### Tool Installation via Alternatives System
 
@@ -52,25 +52,49 @@ The container uses Linux alternatives system to manage multiple versions:
 - **AWS CLI**: `https://awscli.amazonaws.com/awscli-exe-linux-{arch}.zip`
 - **OpenShift CLI**: `https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable-{version}/openshift-client-linux{suffix}.tar.gz`
 
+### Runtime Version Selection
+
+The container includes an entrypoint script (`/usr/local/bin/entrypoint.sh`) that supports dynamic version selection via environment variables:
+
+**Environment Variables**:
+- `OC_VERSION`: Select OpenShift CLI version (4.14-4.20, default: 4.20)
+- `AWS_CLI`: Select AWS CLI source (`fedora` or `official`, default: official)
+
+**Entrypoint Behavior**:
+1. Checks `OC_VERSION` and uses `alternatives --set` to switch to that version if provided
+2. Checks `AWS_CLI` and uses `alternatives --set` to switch to fedora/official if provided
+3. Executes the command via `exec` (defaults to `sleep infinity`)
+
+The entrypoint is located at `entrypoint.sh` in the repository root and copied to `/usr/local/bin/entrypoint.sh` during build.
+
 ## Testing Containers Locally
 
 ```bash
-# Run with bash shell
-podman run -it --entrypoint /bin/bash rosa-boundary:latest
+# Run with default versions
+podman run -it rosa-boundary:latest /bin/bash
 
-# Verify tool versions
-podman run --rm --entrypoint /bin/bash rosa-boundary:latest -c "aws --version && oc version --client"
+# Test with specific OC version
+podman run --rm -e OC_VERSION=4.18 rosa-boundary:latest oc version --client
 
-# Check alternatives configuration
-podman run --rm --entrypoint /bin/bash rosa-boundary:latest -c "alternatives --display aws && alternatives --display oc"
+# Test with Fedora AWS CLI
+podman run --rm -e AWS_CLI=fedora rosa-boundary:latest aws --version
+
+# Test both environment variables together
+podman run -it -e OC_VERSION=4.17 -e AWS_CLI=fedora rosa-boundary:latest /bin/bash
+
+# Verify default tool versions
+podman run --rm rosa-boundary:latest sh -c "aws --version && oc version --client"
+
+# Check alternatives configuration (advanced)
+podman run --rm rosa-boundary:latest sh -c "alternatives --display aws && alternatives --display oc"
 ```
 
 ## Adding New OpenShift Versions
 
-1. Add version to loop in Containerfile:58 (e.g., `4.21`)
-2. Add alternatives registration with appropriate priority (e.g., priority 21 for 4.21)
+1. Add version to loop in Containerfile:38 (e.g., `4.21`)
+2. Add alternatives registration in Containerfile:47-53 with appropriate priority (e.g., priority 21 for 4.21)
 3. Update highest version priority to 100 if it should be the new default
-4. Update README.md version list
+4. Update environment variable documentation in README.md and entrypoint.sh validation
 
 ## Manifest List Structure
 
